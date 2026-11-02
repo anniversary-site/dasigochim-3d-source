@@ -541,5 +541,14 @@ label('욕실', 60, 60); label('주방', 330, 120); label('거실', 300, 330); l
 
 start();
 </script>
+<script>
+// 화면이 좁으면 카메라를 뒤로 빼서 건물이 잘리지 않게 한다 (기준 비율 1.75)
+(function () {
+  const base = camera.position.clone().sub(controls.target);
+  function fit() { const k = Math.max(1, 1.75 / (innerWidth / innerHeight)); camera.position.copy(controls.target).add(base.clone().multiplyScalar(k)); }
+  fit();
+  addEventListener('resize', fit);
+})();
+</script>
 </body>
 </html>
