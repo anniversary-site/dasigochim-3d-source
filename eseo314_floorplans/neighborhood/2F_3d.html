@@ -1,0 +1,308 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>2F 3D</title>
+<style>
+html,body{margin:0;background:#fff;overflow:hidden;font-family:"Apple SD Gothic Neo",sans-serif}
+#note{position:absolute;right:28px;bottom:18px;font-size:15px;color:#555}
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}</script>
+</head><body>
+<div id="note">※ 상기 이미지는 소비자의 이해를 돕기 위해 제작된 것으로 실제와 다를 수 있으며, 향후 변경될 수 있습니다.</div>
+<script type="module">
+import * as THREE from 'three';
+
+const W = innerWidth, H = innerHeight;
+const renderer = new THREE.WebGLRenderer({antialias:true, preserveDrawingBuffer:true});
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(W, H);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#ffffff');
+
+// 원본 평면도(1148x763 px) 좌표를 그대로 월드 좌표로 사용. x→x, 이미지 y→z
+const CX = 560, CY = 400;
+const P = (x, y) => [x - CX, y - CY];
+
+// ---------- textures ----------
+function canvasTex(size, draw, rep) {
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  draw(c.getContext('2d'), size);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(1 / rep, 1 / rep);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+const tileTex = (base, line, n, rep) => canvasTex(256, (g, s) => {
+  g.fillStyle = base; g.fillRect(0, 0, s, s);
+  g.strokeStyle = line; g.lineWidth = 2;
+  for (let i = 0; i <= n; i++) { const p = i * s / n; g.beginPath(); g.moveTo(p, 0); g.lineTo(p, s); g.stroke(); g.beginPath(); g.moveTo(0, p); g.lineTo(s, p); g.stroke(); }
+}, rep);
+const woodTex = canvasTex(256, (g, s) => {
+  const tones = ['#e3cfae', '#dcc6a2', '#e8d6b8', '#d6bf99', '#e0caa8'];
+  const rows = 8, h = s / rows;
+  for (let r = 0; r < rows; r++) {
+    let x = -((r * 53) % 97);
+    while (x < s) { const w = 70 + ((r * 31 + x) % 50); g.fillStyle = tones[(r + Math.abs(x)) % tones.length]; g.fillRect(x, r * h, w, h); g.fillStyle = 'rgba(120,90,50,.25)'; g.fillRect(x, r * h, 1.5, h); x += w; }
+    g.fillStyle = 'rgba(120,90,50,.3)'; g.fillRect(0, r * h, s, 1.5);
+  }
+}, 40);
+const tex = {
+  shop: tileTex('#ecebe7', '#dcdad4', 4, 36),
+  stone: tileTex('#dedfdd', '#cfd0ce', 4, 30),
+  white: tileTex('#f4f4f2', '#e2e2df', 8, 30),
+  wet: tileTex('#9a9c9e', '#8a8c8e', 8, 26),
+  pave: tileTex('#d6d5d0', '#c6c5c0', 6, 40),
+  wood: woodTex,
+};
+
+// ---------- materials ----------
+const M = c => new THREE.MeshStandardMaterial({color: c, roughness: .85, metalness: 0});
+const mat = {
+  slabSide: M('#f2f2f0'),
+  outerSide: M('#2a2a2a'), outerTop: M('#111111'),
+  coreSide: M('#c9c9c5'), coreTop: M('#5a5a5a'),
+  partSide: M('#ededeb'), partTop: M('#8c8c8c'),
+  glass: new THREE.MeshPhysicalMaterial({color: '#bcd3dc', transparent: true, opacity: .28, roughness: .1, metalness: 0, depthWrite: false}),
+  frame: M('#3a3a3a'),
+  dark: M('#2f3133'), mid: M('#6d7072'), light: M('#c8cacb'),
+  white: M('#fafafa'), shaft: M('#3d3f41'),
+  green: M('#9db59a'), brown: M('#8a5a44'), beige: M('#d9c6a6'), woodF: M('#c9a57c'),
+  leaf: M('#6f9a5d'), pot: M('#b9b4aa'), mat: M('#4a4e52'), col: M('#7c7e80'),
+};
+
+// ---------- builders ----------
+function floor(pts, texture, top = 0, depth = 5) {
+  const s = new THREE.Shape(pts.map(([x, y]) => { const [a, b] = P(x, y); return new THREE.Vector2(a, -b); }));
+  const g = new THREE.ExtrudeGeometry(s, {depth, bevelEnabled: false});
+  g.rotateX(-Math.PI / 2);
+  const m = new THREE.Mesh(g, [new THREE.MeshStandardMaterial({map: texture, roughness: .8}), mat.slabSide]);
+  m.position.y = top - depth;
+  m.receiveShadow = true;
+  scene.add(m);
+}
+
+function wallSeg(a, b, t, h, side, top, y0 = 0) {
+  const [x1, z1] = P(...a), [x2, z2] = P(...b);
+  const len = Math.hypot(x2 - x1, z2 - z1) + t;
+  const g = new THREE.BoxGeometry(len, h, t);
+  const m = new THREE.Mesh(g, [side, side, top, side, side, side]);
+  m.position.set((x1 + x2) / 2, y0 + h / 2, (z1 + z2) / 2);
+  m.rotation.y = -Math.atan2(z2 - z1, x2 - x1);
+  m.castShadow = m.receiveShadow = true;
+  scene.add(m);
+}
+const WALL_H = 18;
+const outer = (pts, t = 5) => { for (let i = 0; i < pts.length - 1; i++) wallSeg(pts[i], pts[i + 1], t, WALL_H, mat.outerSide, mat.outerTop); };
+const core = (pts, t = 4) => { for (let i = 0; i < pts.length - 1; i++) wallSeg(pts[i], pts[i + 1], t, WALL_H, mat.coreSide, mat.coreTop); };
+const part = (pts, t = 1.6, h = 13) => { for (let i = 0; i < pts.length - 1; i++) wallSeg(pts[i], pts[i + 1], t, h, mat.partSide, mat.partTop); };
+
+function glass(pts, step = 15) {
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    wallSeg(a, b, 3, 2, mat.frame, mat.frame);                 // 하부 프레임
+    wallSeg(a, b, 2.4, 1.2, mat.frame, mat.frame, WALL_H - 1.2); // 상부 프레임
+    const [x1, z1] = P(...a), [x2, z2] = P(...b);
+    const len = Math.hypot(x2 - x1, z2 - z1);
+    const pane = new THREE.Mesh(new THREE.BoxGeometry(len, WALL_H - 3, .8), mat.glass);
+    pane.position.set((x1 + x2) / 2, 2 + (WALL_H - 3) / 2, (z1 + z2) / 2);
+    pane.rotation.y = -Math.atan2(z2 - z1, x2 - x1);
+    scene.add(pane);
+    const n = Math.max(1, Math.round(len / step));
+    for (let k = 0; k <= n; k++) {
+      const f = k / n, x = x1 + (x2 - x1) * f, z = z1 + (z2 - z1) * f;
+      const mu = new THREE.Mesh(new THREE.BoxGeometry(1.4, WALL_H, 1.4), mat.frame);
+      mu.position.set(x, WALL_H / 2, z); mu.castShadow = true; scene.add(mu);
+    }
+  }
+}
+
+// 방마다 기울어진 로컬 좌표계: (ox,oy)에서 a(도) 방향이 u축, 수직 아래가 v축
+function room(ox, oy, deg) {
+  const g = new THREE.Group();
+  const [x, z] = P(ox, oy);
+  g.position.set(x, 0, z);
+  g.rotation.y = -deg * Math.PI / 180;
+  scene.add(g);
+  return g;
+}
+const world = room(CX, CY, 0);
+function box(parent, u, v, w, d, h, m, y0 = 0, rot = 0) {
+  const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+  b.position.set(u, y0 + h / 2, v);
+  b.rotation.y = -rot * Math.PI / 180;
+  b.castShadow = b.receiveShadow = true;
+  parent.add(b);
+  return b;
+}
+function cyl(parent, u, v, r, h, m, y0 = 0) {
+  const c = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 24), m);
+  c.position.set(u, y0 + h / 2, v); c.castShadow = c.receiveShadow = true; parent.add(c); return c;
+}
+const W_ = (x, y) => [x - CX, y - CY]; // world 그룹용
+function wbox(x, y, w, d, h, m, y0 = 0, rot = 0) { const [u, v] = W_(x, y); return box(world, u, v, w, d, h, m, y0, rot); }
+function wcyl(x, y, r, h, m, y0 = 0) { const [u, v] = W_(x, y); return cyl(world, u, v, r, h, m, y0); }
+
+function plant(parent, u, v, s = 1) {
+  cyl(parent, u, v, 2.4 * s, 4 * s, mat.pot);
+  const l = new THREE.Mesh(new THREE.SphereGeometry(3.6 * s, 16, 12), mat.leaf);
+  l.position.set(u, 7 * s, v); l.castShadow = true; parent.add(l);
+}
+function chair(parent, u, v, rot = 0, m = mat.beige) {
+  box(parent, u, v, 3.6, 3.6, 3.2, m, 0, rot);
+}
+function sofa(parent, u, v, w, d, m, rot = 0) {
+  const g = new THREE.Group(); g.position.set(u, 0, v); g.rotation.y = -rot * Math.PI / 180; parent.add(g);
+  box(g, 0, 0, w, d, 3.2, m);
+  box(g, 0, -d / 2 + 1.2, w, 2.4, 6.2, m);
+  box(g, -w / 2 + 1, .6, 2, d - 1.2, 4.6, m);
+  box(g, w / 2 - 1, .6, 2, d - 1.2, 4.6, m);
+}
+function stairs(parent, u, v, w, len, steps, h0, h1, axis = 'v') {
+  for (let i = 0; i < steps; i++) {
+    const f = i / steps, hh = h0 + (h1 - h0) * (i + 1) / steps, sl = len / steps;
+    const m = i % 2 ? mat.light : M('#d5d6d6');
+    if (axis === 'v') box(parent, u, v + sl * i + sl / 2, w, sl, hh, m);
+    else box(parent, u + sl * i + sl / 2, v, sl, w, hh, m);
+  }
+}
+
+// ---------- ground ----------
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), new THREE.ShadowMaterial({opacity: .16}));
+ground.rotation.x = -Math.PI / 2; ground.position.y = -5; ground.receiveShadow = true; scene.add(ground);
+
+// ---------- floors ----------
+const shopPoly = [[233,183],[368,160],[412,365],[440,505],[880,505],[880,638],[385,638],[325,600]];
+floor(shopPoly, tex.shop);
+floor([[368,160],[392,152],[418,268],[425,302],[438,357],[465,477],[440,505],[412,365]], tex.pave, -.4);
+floor([[465,477],[880,477],[880,505],[440,505]], tex.stone);
+floor([[392,152],[528,127],[575,242],[418,268]], tex.wood);
+floor([[418,268],[495,256],[497,297],[425,302]], tex.wet);
+floor([[425,302],[497,297],[510,357],[438,357]], tex.white);
+floor([[495,257],[575,243],[597,357],[597,477],[558,477],[558,357],[510,357]], tex.stone);
+floor([[438,357],[555,357],[555,477],[465,477]], tex.stone);
+floor([[597,362],[648,362],[648,477],[597,477]], tex.stone);
+floor([[648,365],[687,365],[687,477],[648,477]], tex.white);
+floor([[687,365],[745,365],[767,432],[798,432],[798,477],[687,477]], tex.wet);
+floor([[798,428],[880,428],[880,477],[798,477]], tex.stone);
+for (const [y1, y2] of [[370,402],[405,433],[440,473]]) floor([[512,y1],[552,y1],[552,y2],[512,y2]], tex.wet, .05);
+wbox(532, 386, 38, 30, .3, mat.shaft); wbox(532, 419, 38, 26, .3, mat.shaft); wbox(532, 456, 38, 31, .3, mat.shaft);
+wbox(780, 454, 32, 34, .3, mat.shaft);
+
+// ---------- 근린생활시설 외곽 (커튼월) ----------
+outer([[233,183],[368,160]]);
+glass([[368,160],[390,262]]); glass([[396,290],[412,365],[425,430]]); glass([[431,458],[440,505]]);
+outer([[880,477],[880,638],[385,638],[325,600],[233,183]], 6);
+glass([[440,505],[478,505]]); glass([[495,505],[532,505]]); glass([[549,505],[615,505]]);
+glass([[632,505],[727,505]]); glass([[744,505],[775,505]]); glass([[792,505],[880,505]]);
+// 기둥
+for (const [x, y] of [[300,298],[325,415],[348,500],[372,592]]) wbox(x, y, 12, 9, WALL_H, mat.col, 0, 12);
+for (const [x, y] of [[522,592],[652,592],[766,592],[852,592]]) wbox(x, y, 11, 13, WALL_H, mat.col);
+for (const [x, y] of [[275,177],[345,165]]) wbox(x, y, 11, 7, WALL_H, mat.col, 0, -10);
+
+// ---------- 피트니스 / 화장실 / 세탁실 / 커뮤니티 외벽 ----------
+outer([[392,152],[528,127],[575,242],[597,357]]);
+outer([[392,152],[418,268],[425,302],[438,357]]);
+glass([[418,268],[492,256]]); glass([[512,253],[575,242]], 12);
+// 화장실1
+core([[425,302],[497,297]], 2.5);
+core([[495,256],[496,280]], 2.5); core([[497,294],[497,297]], 2.5);
+part([[455,262],[457,300]]); part([[475,259],[476,276]]);
+// 세탁실
+core([[497,297],[503,322]], 2.5); core([[507,342],[510,357]], 2.5);
+
+// ---------- 코어 (계단·엘리베이터) ----------
+core([[438,357],[555,357]]);
+core([[438,357],[441,368]]); core([[445,384],[465,477],[555,477]]);
+core([[555,357],[555,372]]); core([[555,398],[555,408]]); core([[555,430],[555,442]]); core([[555,468],[555,477]]);
+core([[510,357],[510,477]], 3); core([[490,357],[490,385]], 3); core([[480,385],[510,385]], 3);
+core([[510,403.5],[555,403.5]], 2.5); core([[510,436.5],[555,436.5]], 2.5);
+// 계단2 / 로비 / 화장실2
+core([[597,362],[597,477],[657,477]]);
+core([[597,362],[668,362]]); core([[648,362],[648,445]]);
+core([[620,452],[648,452]], 2.5); core([[630,452],[630,477]], 2.5);
+core([[672,477],[687,477]]); core([[687,365],[745,365]]);
+core([[687,365],[687,398]]); core([[687,412],[687,477]]); core([[708,477],[798,477]]);
+core([[745,365],[767,432],[798,432],[798,477]], 6);
+core([[760,437],[760,477]], 4);
+part([[703,410],[743,410]]); part([[703,410],[703,470]]);
+part([[723,368],[723,405]]); part([[723,380],[743,380]]); part([[723,393],[743,393]]);
+part([[727,410],[727,432]]); part([[712,432],[743,432]]);
+// 외부 계단
+core([[818,478],[877,478]], 3); core([[877,430],[877,478]], 3); core([[800,430],[877,430]], 2);
+
+// 계단 디딤판
+{ const g = room(467, 390, 0);
+  stairs(g, 10, 4, 18, 60, 12, 0, 9); stairs(g, 31, 4, 18, 60, 12, 18, 9);
+  box(g, 20.5, 34, 1.5, 60, 12, mat.frame); }
+{ const g = room(603, 372, 0);
+  stairs(g, 10, 4, 18, 64, 12, 0, 9); stairs(g, 30, 4, 18, 64, 12, 18, 9);
+  box(g, 20, 36, 1.5, 64, 12, mat.frame); }
+{ const g = room(820, 433, 0);
+  stairs(g, 0, 5, 9, 43, 10, 0, 10, 'u'); stairs(g, 0, 18, 9, 43, 10, 18, 10, 'u');
+  box(g, 22, 11.5, 43, 1.2, 12, mat.frame); }
+
+// ---------- 피트니스 가구 ----------
+{ const g = room(392, 152, -10.42);
+  for (let i = 0; i < 7; i++) { const u = 16 + i * 13; box(g, u, 15, 8, 17, 2.2, mat.dark); box(g, u, 7.5, 8, 2, 9, mat.dark); }
+  for (let i = 0; i < 5; i++) { const u = 18 + i * 11; box(g, u, 45, 4, 10, 4, mat.mid); box(g, u, 41, 4, 2, 8, mat.dark); }
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 2; j++) { const u = 82 + i * 16, v = 52 + j * 22;
+    box(g, u, v, 10, 12, 1.5, mat.mid); box(g, u, v - 4, 9, 2, 13, mat.dark); box(g, u, v + 1, 3, 7, 4.5, mat.light); }
+  box(g, 6, 75, 5, 50, 3, mat.dark);
+  for (let i = 0; i < 6; i++) cyl(g, 6, 54 + i * 8, 1.5, 4.5, mat.mid);
+  for (let i = 0; i < 3; i++) box(g, 26 + i * 15, 92, 11, 18, .6, mat.mat);
+  plant(g, 130, 12); plant(g, 128, 100); }
+
+// ---------- 화장실1 ----------
+for (const [x, y] of [[433,290],[466,285],[485,270]]) { wbox(x, y, 5, 6, 3.5, mat.white); wbox(x, y - 3, 5, 2, 6, mat.white); }
+wbox(440, 276, 10, 5, 7, mat.light);
+
+// ---------- 세탁실 ----------
+{ const g = room(430, 303, -4);
+  for (let i = 0; i < 5; i++) { box(g, 7 + i * 12, 7, 11, 10, 10, mat.white); cyl(g, 7 + i * 12, 7, 3.2, .6, mat.mid, 10); }
+  box(g, 38, 30, 34, 10, 6, mat.woodF);
+  for (let i = 0; i < 4; i++) chair(g, 26 + i * 8, 40, 0, mat.light); }
+
+// ---------- 휴게 및 커뮤니티 ----------
+{ const g = room(500, 262, -9.9);
+  box(g, 46, 16, 40, 11, 5.5, mat.woodF);
+  for (let i = 0; i < 5; i++) { chair(g, 30 + i * 8, 8.5); chair(g, 30 + i * 8, 23.5); }
+  sofa(g, 22, 47, 26, 9, mat.green, 0);
+  sofa(g, 22, 76, 26, 9, mat.green, 180);
+  box(g, 22, 61.5, 16, 9, 3.2, mat.woodF);
+  sofa(g, 4, 61.5, 9, 8, mat.brown, 90);
+  for (const [u, v] of [[58, 52], [70, 78]]) { cyl(g, u, v, 5, 5, mat.white); chair(g, u - 8, v); chair(g, u + 8, v); chair(g, u, v - 8); chair(g, u, v + 8); }
+  plant(g, 6, 8); plant(g, 78, 30); }
+for (const y of [380, 425]) wbox(570, y, 6, 20, 3.5, mat.woodF);
+plant(world, 590 - CX, 370 - CY); plant(world, 590 - CX, 466 - CY);
+
+// ---------- 화장실2 / 로비 ----------
+for (const y of [374, 387, 399]) { wbox(737, y, 6, 5, 3.5, mat.white); wbox(740, y, 2, 5, 6, mat.white); }
+for (const x of [716, 735]) { wbox(x, 420, 5, 6, 3.5, mat.white); wbox(x, 416, 5, 2, 6, mat.white); }
+wbox(735, 466, 6, 5, 3.5, mat.white); wbox(709, 440, 5, 9, 6, mat.light);
+wbox(698, 372, 12, 6, 7, mat.light);
+for (const y of [392, 420, 448]) wcyl(668, y, 4, 7, mat.light);
+plant(world, 660 - CX, 470 - CY, .8);
+
+// 아케이드 화분
+for (const x of [500, 650, 760, 860]) plant(world, x - CX, 491 - CY, .9);
+
+// ---------- 조명 ----------
+scene.add(new THREE.HemisphereLight('#ffffff', '#d8d8d4', 1.35));
+const sun = new THREE.DirectionalLight('#ffffff', 1.9);
+sun.position.set(-260, 520, -330);
+sun.shadow.mapSize.set(4096, 4096);
+Object.assign(sun.shadow.camera, {left: -520, right: 520, top: 480, bottom: -480, near: 10, far: 1600});
+sun.shadow.bias = -0.0006; sun.shadow.normalBias = .4; sun.shadow.radius = 3;
+sun.castShadow = true; scene.add(sun);
+
+// ---------- 카메라 (정면에서 비스듬히 내려다보는 원근) ----------
+const cam = new THREE.PerspectiveCamera(19, W / H, 10, 5000);
+cam.position.set(-10, 1350, 1180);
+cam.lookAt(-6, 0, 0);
+renderer.render(scene, cam);
+window.__done = true;
+</script></body></html>
